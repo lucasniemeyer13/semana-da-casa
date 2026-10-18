@@ -522,7 +522,8 @@ td.barcell { width: 38%; min-width: 120px; }
     sync.busy = false; paintSync();
     if (sync.again) saveSheet();
   }
-  // Lê a planilha (inclusive o que foi editado direto nela). Na primeira vez, um navegador com versão própria (não só o ponto de partida) envia a dele.
+  // Lê a planilha (inclusive o que foi editado direto nela). A planilha manda: um navegador que conecta pela primeira vez
+  // carrega o que está nela (guardando a versão local como reserva) e só envia a dele se a planilha estiver vazia.
   async function pullSheet(first) {
     if (!sheetOn() || sync.busy) return;
     if (!sync.senha) { sync.status = 'locked'; paintSync(); return; }
@@ -534,13 +535,19 @@ td.barcell { width: 38%; min-width: 120px; }
       if (!j.ok) throw new Error(j.erro || 'falha');
       const st = j.estado;
       const has = st && st.tasks && Object.keys(st.tasks).length;
-      if (!has || sync.pend || (first && !sync.last && !S.seeded)) { if (first) saveSheet(); return; }
+      if (!has) { if (first) saveSheet(); return; }
+      const primeiraConexao = !sync.last;
+      if (primeiraConexao) {
+        try { localStorage.setItem('semana-da-casa-antes-de-conectar', JSON.stringify(snapshotState())); } catch (e) {}
+        sync.pend = false;
+      } else if (sync.pend) { if (first) saveSheet(); return; }
       if (j.versao === sync.last) { if (first) { sync.status = 'saved'; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; paintSync(); } return; }
       if (drag.active || S.editing || S.panel) return;
       S.tasks = new Map(Object.entries(st.tasks)); S.bands = new Map(Object.entries(st.bands || {}));
       S.hist = new Map(Object.entries(st.hist || {})); S.week = st.week || null; S.seeded = false;
       sync.last = j.versao; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; sync.status = 'saved'; saveSync();
       saveLocal(); rerender();
+      if (primeiraConexao) toast('Carreguei a semana que está na planilha.');
     } catch (e) {
       if (first) { sync.status = 'error'; paintSync(); }
     }
