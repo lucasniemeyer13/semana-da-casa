@@ -85,6 +85,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, .pill:focus-wit
 .sync { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .sync .dot { background: var(--muted); }
 .sync.on .dot { background: var(--good); }
+.sync.err .dot { background: var(--bad); }
+.sync.err { color: var(--bad); }
 
 /* Abas */
 .pages { display: flex; gap: 4px; border-bottom: 1px solid var(--rule-strong); overflow-x: auto; }
@@ -207,7 +209,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, .pill:focus-wit
   background: var(--surface); border: 1.5px solid var(--pen); border-radius: 10px; padding: 8px;
   display: grid; gap: 8px; box-shadow: var(--shadow);
 }
-.form input[type="text"], .form select, .panel input[type="text"], .panel select {
+.form input[type="text"], .form select, .panel input[type="text"], .panel input[type="password"], .panel select {
   width: 100%; border: 1px solid var(--rule-strong); border-radius: 8px; padding: 7px 8px;
   font: inherit; background: var(--paper); color: var(--ink); min-width: 0;
 }
@@ -355,6 +357,11 @@ td.barcell { width: 38%; min-width: 120px; }
   const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   const LKEY = 'semana-da-casa-v1';
   const PKEY = 'semana-da-casa-prefs';
+  // Planilha "Semana da Casa" no Drive do trabalho. SHEET_URL é o app da web do Apps Script; vazia, a gravação fica desligada.
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwFDyNoFXuWzspKSRhNRYyqX7AQYBxhX1MP3yLzfkCa4WGuxW9zpp3HQe7eg7dO95f4jQ/exec';
+  const SHEET_VIEW = 'https://docs.google.com/spreadsheets/d/1v3_Ag52cz6paAL6JA9Tg82lY1sz_yJzb5JKtVDXCItw/edit';
+  const SKEY = 'semana-da-casa-sync';
+  const PWKEY = 'semana-da-casa-senha';
   const GRIP = '<svg viewBox="0 0 8 14" aria-hidden="true"><circle cx="2" cy="2" r="1.3"/><circle cx="6" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="6" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="6" cy="12" r="1.3"/></svg>';
   const XICON = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1l-8 8" fill="none"/></svg>';
 
@@ -426,14 +433,14 @@ td.barcell { width: 38%; min-width: 120px; }
       const o = JSON.parse(localStorage.getItem(LKEY) || 'null');
       if (o) {
         S.tasks = new Map(Object.entries(o.tasks || {})); S.bands = new Map(Object.entries(o.bands || {}));
-        S.hist = new Map(Object.entries(o.hist || {})); S.week = o.week || null;
+        S.hist = new Map(Object.entries(o.hist || {})); S.week = o.week || null; S.seeded = !!o.seeded;
         return;
       }
     } catch (e) {}
     try {
       const seed = JSON.parse(document.getElementById('seed').textContent);
       S.tasks = new Map(Object.entries(seed.tasks || {})); S.bands = new Map(Object.entries(seed.bands || {}));
-      S.week = seed.week || null;
+      S.week = seed.week || null; S.seeded = true;
       saveLocal();
     } catch (e) {}
   }
@@ -441,7 +448,7 @@ td.barcell { width: 38%; min-width: 120px; }
     if (S.mode !== 'local') return;
     try {
       localStorage.setItem(LKEY, JSON.stringify({
-        tasks: Object.fromEntries(S.tasks), bands: Object.fromEntries(S.bands), hist: Object.fromEntries(S.hist), week: S.week,
+        tasks: Object.fromEntries(S.tasks), bands: Object.fromEntries(S.bands), hist: Object.fromEntries(S.hist), week: S.week, seeded: !!S.seeded,
       }));
     } catch (e) {}
   }
@@ -463,7 +470,81 @@ td.barcell { width: 38%; min-width: 120px; }
       toast('Não consegui salvar a última mudança. Confira a conexão e tente de novo.');
     }
   }
-  function changed() { saveLocal(); render(); }
+  function changed() { S.seeded = false; saveLocal(); render(); scheduleSave(); }
+
+  // ---------- planilha (só no site, fora do Claude) ----------
+  const sync = { status: 'idle', at: null, timer: null, busy: false, again: false, last: null, pend: false, senha: '' };
+  const sheetOn = () => !!SHEET_URL && S.mode === 'local';
+  function loadSync() {
+    try { const o = JSON.parse(localStorage.getItem(SKEY) || '{}'); sync.last = o.last || null; sync.pend = !!o.pend; } catch (e) {}
+    try { sync.senha = localStorage.getItem(PWKEY) || ''; } catch (e) {}
+  }
+  function setSenha(v) { sync.senha = v; try { v ? localStorage.setItem(PWKEY, v) : localStorage.removeItem(PWKEY); } catch (e) {} }
+  function senhaErrada() { setSenha(''); sync.status = 'locked'; rerender(); toast('A planilha recusou a senha. Clique em Conectar planilha e digite de novo.'); }
+  function saveSync() { try { localStorage.setItem(SKEY, JSON.stringify({ last: sync.last, pend: sync.pend })); } catch (e) {} }
+  const hhmm = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
+  function syncLabel() {
+    return {
+      saving: 'Salvando na planilha…', loading: 'Lendo a planilha…', pending: 'Alterações a salvar',
+      error: 'Não salvou na planilha', locked: 'Planilha não conectada', saved: sync.at ? 'Salvo na planilha às ' + hhmm(sync.at) : 'Planilha em dia',
+    }[sync.status] || 'Planilha';
+  }
+  function paintSync() {
+    const el = document.getElementById('sync-txt'); if (!el) return;
+    el.textContent = syncLabel();
+    el.parentElement.className = 'sync' + (sync.status === 'saved' ? ' on' : sync.status === 'error' ? ' err' : '');
+  }
+  const snapshotState = () => ({ tasks: Object.fromEntries(S.tasks), bands: Object.fromEntries(S.bands), hist: Object.fromEntries(S.hist), week: S.week });
+  const payload = () => JSON.stringify({ senha: sync.senha, estado: snapshotState(), origem: (mq.matches ? 'celular' : 'computador') + ' · ' + (navigator.platform || '') });
+  function scheduleSave() {
+    if (!sheetOn()) return;
+    sync.pend = true; saveSync();
+    if (!sync.senha) { sync.status = 'locked'; paintSync(); return; }
+    sync.status = 'pending'; paintSync();
+    clearTimeout(sync.timer); sync.timer = setTimeout(saveSheet, 1500);
+  }
+  async function saveSheet() {
+    if (!sheetOn()) return;
+    clearTimeout(sync.timer);
+    if (!sync.senha) { sync.status = 'locked'; paintSync(); return; }
+    if (sync.busy) { sync.again = true; return; }
+    sync.busy = true; sync.again = false; sync.status = 'saving'; paintSync();
+    try {
+      const r = await fetch(SHEET_URL, { method: 'POST', body: payload() });
+      const j = await r.json();
+      if (j.erro === 'senha') { sync.busy = false; senhaErrada(); return; }
+      if (!j.ok) throw new Error(j.erro || 'falha');
+      sync.last = j.versao; sync.at = new Date(j.salvoEm); sync.pend = sync.again; sync.status = 'saved'; saveSync();
+    } catch (e) {
+      sync.status = 'error';
+      toast('Não consegui salvar na planilha. As mudanças continuam neste navegador; use o botão Salvar para tentar de novo.');
+    }
+    sync.busy = false; paintSync();
+    if (sync.again) saveSheet();
+  }
+  // Lê a planilha (inclusive o que foi editado direto nela). Na primeira vez, um navegador com versão própria (não só o ponto de partida) envia a dele.
+  async function pullSheet(first) {
+    if (!sheetOn() || sync.busy) return;
+    if (!sync.senha) { sync.status = 'locked'; paintSync(); return; }
+    if (first) { sync.status = 'loading'; paintSync(); }
+    try {
+      const r = await fetch(SHEET_URL, { method: 'POST', body: JSON.stringify({ acao: 'ler', senha: sync.senha }) });
+      const j = await r.json();
+      if (j.erro === 'senha') { senhaErrada(); return; }
+      if (!j.ok) throw new Error(j.erro || 'falha');
+      const st = j.estado;
+      const has = st && st.tasks && Object.keys(st.tasks).length;
+      if (!has || sync.pend || (first && !sync.last && !S.seeded)) { if (first) saveSheet(); return; }
+      if (j.versao === sync.last) { if (first) { sync.status = 'saved'; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; paintSync(); } return; }
+      if (drag.active || S.editing || S.panel) return;
+      S.tasks = new Map(Object.entries(st.tasks)); S.bands = new Map(Object.entries(st.bands || {}));
+      S.hist = new Map(Object.entries(st.hist || {})); S.week = st.week || null; S.seeded = false;
+      sync.last = j.versao; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; sync.status = 'saved'; saveSync();
+      saveLocal(); rerender();
+    } catch (e) {
+      if (first) { sync.status = 'error'; paintSync(); }
+    }
+  }
 
   function putTask(id, data) { S.tasks.set(id, data); changed(); if (db) enqueue('tarefas/' + id, () => db.doc('tarefas/' + id).set(data)); }
   function patchTask(id, patch) {
@@ -535,7 +616,7 @@ td.barcell { width: 38%; min-width: 120px; }
     app.innerHTML = header() + pagesNav() + body;
     layer.innerHTML = panelHTML();
     if (render.focusForm) {
-      const f = app.querySelector('.form input[type="text"]') || layer.querySelector('.panel input[type="text"]');
+      const f = app.querySelector('.form input[type="text"]') || layer.querySelector('.panel input[type="text"], .panel input[type="password"]');
       if (f) { f.focus(); f.select(); }
       render.focusForm = false;
     }
@@ -566,12 +647,15 @@ td.barcell { width: 38%; min-width: 120px; }
     }
     const filt = S.page === 'consolidado' ? '' : `<div class="seg" role="group" aria-label="Mostrar tarefas de">${[['todos', 'Todos'], ['L', 'Lucas'], ['A', 'Ana Júlia']]
       .map(([k, n]) => `<button data-act="filter" data-v="${k}" aria-pressed="${S.filter === k}">${n}</button>`).join('')}</div>`;
-    const sync = S.mode === 'db' ? '<span class="sync on"><span class="dot"></span>Compartilhada</span>'
+    const syncHTML = S.mode === 'db' ? '<span class="sync on"><span class="dot"></span>Compartilhada</span>'
+      : sheetOn() ? `<span class="sync${sync.status === 'saved' ? ' on' : sync.status === 'error' ? ' err' : ''}"><span class="dot"></span><span id="sync-txt">${syncLabel()}</span></span>`
+        + (sync.senha ? '<button class="btn" data-act="save-sheet">Salvar</button>' : '<button class="btn primary" data-act="sheet-login">Conectar planilha</button>')
+        + `<a class="linkbtn" href="${SHEET_VIEW}" target="_blank" rel="noopener">Abrir planilha</a>`
       : S.mode === 'local' ? '<span class="sync" title="Fora do Claude a agenda fica salva só neste navegador"><span class="dot"></span>Salva neste navegador</span>' : '';
     return `<header class="top">
       <div class="title-block"><h1>Semana da Casa</h1><p class="dates">${rangeLabel()}</p></div>
       ${right}
-      <div class="actions">${filt}${S.readOnly ? '' : '<button class="btn" data-act="novasemana">Nova semana</button>'}${sync}</div>
+      <div class="actions">${filt}${S.readOnly ? '' : '<button class="btn" data-act="novasemana">Nova semana</button>'}${syncHTML}</div>
     </header>`;
   }
 
@@ -766,6 +850,14 @@ td.barcell { width: 38%; min-width: 120px; }
 
   function panelHTML() {
     const P = S.panel; if (!P) return '';
+    if (P.type === 'senha') {
+      return `<div class="overlay" data-act="close-panel"><form class="panel" data-form="senha" role="dialog" aria-modal="true" aria-labelledby="pn-t">
+        <h2 id="pn-t">Conectar à planilha</h2>
+        <p>Digite a senha da casa. Ela fica guardada só neste navegador e é pedida uma vez.</p>
+        <label class="f">Senha<input type="password" id="s-senha" name="senha" autocomplete="current-password"></label>
+        <div class="row"><span class="sp"></span><button type="button" class="btn" data-act="close-panel">Cancelar</button><button type="submit" class="btn primary">Conectar</button></div>
+      </form></div>`;
+    }
     if (P.type === 'novasemana') {
       const next = addDays(weekStart(), 7);
       return `<div class="overlay" data-act="close-panel"><div class="panel" role="dialog" aria-modal="true" aria-labelledby="pn-t">
@@ -838,6 +930,8 @@ td.barcell { width: 38%; min-width: 120px; }
       case 'novasemana': S.panel = { type: 'novasemana' }; rerender(); break;
       case 'close-panel': S.panel = null; rerender(); break;
       case 'confirm-week': S.panel = null; startNewWeek(); break;
+      case 'save-sheet': saveSheet(); break;
+      case 'sheet-login': S.panel = { type: 'senha' }; render.focusForm = true; rerender(); break;
     }
   });
 
@@ -871,6 +965,11 @@ td.barcell { width: 38%; min-width: 120px; }
         if (dias.length > 1) toast(`“${titulo}” adicionada em ${dias.length} dias.`);
       }
       rerender();
+    } else if (f.dataset.form === 'senha') {
+      const v = f.senha.value;
+      if (!v) { f.senha.focus(); return; }
+      setSenha(v); S.panel = null; rerender();
+      pullSheet(true);
     } else if (f.dataset.form === 'band') {
       const texto = f.texto.value.trim();
       if (!texto) { f.texto.focus(); return; }
@@ -901,7 +1000,7 @@ td.barcell { width: 38%; min-width: 120px; }
     for (const id of bandIds) S.bands.delete(id);
     S.week = { inicio: next };
     const ti = todayIdx(); S.day = ti >= 0 ? ti : 0;
-    saveLocal(); rerender();
+    S.seeded = false; saveLocal(); rerender(); scheduleSave();
     toast('Nova semana começada. O resultado anterior está no Consolidado.');
     if (!db) return;
     const jobs = [
@@ -999,7 +1098,14 @@ td.barcell { width: 38%; min-width: 120px; }
   async function init() {
     loadPrefs();
     if (!window.claude || typeof window.claude.use !== 'function') {
-      S.mode = 'local'; loadLocal(); S.ready = true; render(); return;
+      S.mode = 'local'; loadLocal(); loadSync(); S.ready = true; render();
+      if (sheetOn()) {
+        pullSheet(true);
+        setInterval(() => { if (!document.hidden) pullSheet(false); }, 45000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) pullSheet(false); });
+        window.addEventListener('pagehide', () => { if (sync.pend && sync.senha) try { navigator.sendBeacon(SHEET_URL, payload()); } catch (e) {} });
+      }
+      return;
     }
     render();
     const [d, u] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
