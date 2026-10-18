@@ -1,4 +1,4 @@
-# Semana da Casa
+# Semana do Lar
 
 Agenda semanal da casa em três abas: **Atribuição** (quem deveria fazer cada tarefa), **Execução** (quem fez) e **Consolidado** (como foi o cumprimento da semana).
 

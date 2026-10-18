@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Semana da Casa</title>
+<title>Semana do Lar</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap">
@@ -653,7 +653,7 @@ td.barcell { width: 38%; min-width: 120px; }
         + `<a class="linkbtn" href="${SHEET_VIEW}" target="_blank" rel="noopener">Abrir planilha</a>`
       : S.mode === 'local' ? '<span class="sync" title="Fora do Claude a agenda fica salva só neste navegador"><span class="dot"></span>Salva neste navegador</span>' : '';
     return `<header class="top">
-      <div class="title-block"><h1>Semana da Casa</h1><p class="dates">${rangeLabel()}</p></div>
+      <div class="title-block"><h1>Semana do Lar</h1><p class="dates">${rangeLabel()}</p></div>
       ${right}
       <div class="actions">${filt}${S.readOnly ? '' : '<button class="btn" data-act="novasemana">Nova semana</button>'}${syncHTML}</div>
     </header>`;
