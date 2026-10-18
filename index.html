@@ -522,36 +522,46 @@ td.barcell { width: 38%; min-width: 120px; }
     sync.busy = false; paintSync();
     if (sync.again) saveSheet();
   }
-  // Lê a planilha (inclusive o que foi editado direto nela). A planilha manda: um navegador que conecta pela primeira vez
-  // carrega o que está nela (guardando a versão local como reserva) e só envia a dele se a planilha estiver vazia.
-  async function pullSheet(first) {
+  // Lê a planilha (inclusive o que foi editado direto nela). A planilha manda:
+  // - se ela não mudou desde a última sincronização deste aparelho, só envia o que estiver pendente aqui;
+  // - se mudou, carrega a versão dela (o que estava pendente aqui fica guardado como reserva);
+  // - vazia, recebe a versão deste aparelho. "Atualizar" (force) sempre carrega a planilha.
+  async function pullSheet(first, force) {
     if (!sheetOn() || sync.busy) return;
-    if (!sync.senha) { sync.status = 'locked'; paintSync(); return; }
-    if (first) { sync.status = 'loading'; paintSync(); }
+    if (!sync.senha) { sync.status = 'locked'; S.loadingSheet = false; paintSync(); return; }
+    if (first || force) { sync.status = 'loading'; paintSync(); }
     try {
       const r = await fetch(SHEET_URL, { method: 'POST', body: JSON.stringify({ acao: 'ler', senha: sync.senha }) });
       const j = await r.json();
-      if (j.erro === 'senha') { senhaErrada(); return; }
+      if (j.erro === 'senha') { S.loadingSheet = false; senhaErrada(); return; }
       if (!j.ok) throw new Error(j.erro || 'falha');
       const st = j.estado;
       const has = st && st.tasks && Object.keys(st.tasks).length;
-      if (!has) { if (first) saveSheet(); return; }
-      const primeiraConexao = !sync.last;
-      if (primeiraConexao) {
-        try { localStorage.setItem('semana-da-casa-antes-de-conectar', JSON.stringify(snapshotState())); } catch (e) {}
-        sync.pend = false;
-      } else if (sync.pend) { if (first) saveSheet(); return; }
-      if (j.versao === sync.last) { if (first) { sync.status = 'saved'; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; paintSync(); } return; }
-      if (drag.active || S.editing || S.panel) return;
+      if (!has) { if (first || force) saveSheet(); return; }
+      const mudouLa = j.versao !== sync.last;
+      if (!mudouLa && !force) {
+        if (sync.pend) saveSheet();
+        else if (first) { sync.status = 'saved'; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; paintSync(); }
+        return;
+      }
+      if (!force && !first && (drag.active || S.editing || S.panel)) return;
+      const tinhaPendente = sync.pend && !!sync.last;
+      if (sync.pend || !sync.last) { try { localStorage.setItem('semana-da-casa-antes-de-carregar', JSON.stringify(snapshotState())); } catch (e) {} }
+      clearTimeout(sync.timer);
       S.tasks = new Map(Object.entries(st.tasks)); S.bands = new Map(Object.entries(st.bands || {}));
       S.hist = new Map(Object.entries(st.hist || {})); S.week = st.week || null; S.seeded = false;
-      sync.last = j.versao; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; sync.status = 'saved'; saveSync();
+      S.editing = null; S.panel = null;
+      sync.last = j.versao; sync.pend = false; sync.at = st.salvoEm ? new Date(st.salvoEm) : null; sync.status = 'saved'; saveSync();
       saveLocal(); rerender();
-      if (primeiraConexao) toast('Carreguei a semana que está na planilha.');
+      if (force) toast('Semana atualizada com a planilha.');
+      else if (tinhaPendente) toast('Este aparelho tinha mudanças que não chegaram à planilha. Carreguei a versão da planilha.');
     } catch (e) {
-      if (first) { sync.status = 'error'; paintSync(); }
+      if (first || force) { sync.status = 'error'; paintSync(); if (force) toast('Não consegui ler a planilha. Confira a internet e tente de novo.'); }
+    } finally {
+      if (S.loadingSheet) { S.loadingSheet = false; rerender(); }
     }
   }
+
 
   function putTask(id, data) { S.tasks.set(id, data); changed(); if (db) enqueue('tarefas/' + id, () => db.doc('tarefas/' + id).set(data)); }
   function patchTask(id, patch) {
@@ -615,6 +625,7 @@ td.barcell { width: 38%; min-width: 120px; }
     if (S.day === null) { const ti = todayIdx(); S.day = ti >= 0 ? ti : 0; }
     let body = '';
     if (!S.ready) body = '<div class="notice">Carregando a semana…</div>';
+    else if (S.loadingSheet) body = '<div class="notice">Lendo a semana na planilha…</div>';
     else if (S.page === 'consolidado') body = reportView();
     else {
       if (S.tasks.size === 0 && !S.readOnly) body += '<div class="notice">Nenhuma tarefa ainda. Use <b>+ Adicionar</b> em qualquer período para criar a primeira.</div>';
@@ -656,7 +667,7 @@ td.barcell { width: 38%; min-width: 120px; }
       .map(([k, n]) => `<button data-act="filter" data-v="${k}" aria-pressed="${S.filter === k}">${n}</button>`).join('')}</div>`;
     const syncHTML = S.mode === 'db' ? '<span class="sync on"><span class="dot"></span>Compartilhada</span>'
       : sheetOn() ? `<span class="sync${sync.status === 'saved' ? ' on' : sync.status === 'error' ? ' err' : ''}"><span class="dot"></span><span id="sync-txt">${syncLabel()}</span></span>`
-        + (sync.senha ? '<button class="btn" data-act="save-sheet">Salvar</button>' : '<button class="btn primary" data-act="sheet-login">Conectar planilha</button>')
+        + (sync.senha ? '<button class="btn" data-act="pull-sheet" title="Carregar a versão que está na planilha">Atualizar</button><button class="btn" data-act="save-sheet">Salvar</button>' : '<button class="btn primary" data-act="sheet-login">Conectar planilha</button>')
         + `<a class="linkbtn" href="${SHEET_VIEW}" target="_blank" rel="noopener">Abrir planilha</a>`
       : S.mode === 'local' ? '<span class="sync" title="Fora do Claude a agenda fica salva só neste navegador"><span class="dot"></span>Salva neste navegador</span>' : '';
     return `<header class="top">
@@ -938,6 +949,7 @@ td.barcell { width: 38%; min-width: 120px; }
       case 'close-panel': S.panel = null; rerender(); break;
       case 'confirm-week': S.panel = null; startNewWeek(); break;
       case 'save-sheet': saveSheet(); break;
+      case 'pull-sheet': pullSheet(false, true); break;
       case 'sheet-login': S.panel = { type: 'senha' }; render.focusForm = true; rerender(); break;
     }
   });
@@ -1105,7 +1117,9 @@ td.barcell { width: 38%; min-width: 120px; }
   async function init() {
     loadPrefs();
     if (!window.claude || typeof window.claude.use !== 'function') {
-      S.mode = 'local'; loadLocal(); loadSync(); S.ready = true; render();
+      S.mode = 'local'; loadLocal(); loadSync(); S.ready = true;
+      S.loadingSheet = sheetOn() && !!sync.senha;
+      render();
       if (sheetOn()) {
         pullSheet(true);
         setInterval(() => { if (!document.hidden) pullSheet(false); }, 45000);
