@@ -4,4 +4,4 @@ Agenda semanal da casa em três abas: **Atribuição** (quem deveria fazer cada 
 
 Página: https://lucasniemeyer13.github.io/semana-da-casa/
 
-Fora do Claude, as tarefas ficam salvas só no navegador de quem usa (localStorage).
+Na primeira abertura a página carrega a rotina do caderno como ponto de partida. Depois, as mudanças ficam salvas só no navegador de quem usa (localStorage).
