@@ -4,7 +4,7 @@ Agenda semanal da casa em três abas: **Atribuição** (quem deveria fazer cada 
 
 Página: https://lucasniemeyer13.github.io/semana-da-casa/
 
-Na primeira abertura a página carrega a rotina do caderno como ponto de partida.
+Na primeira abertura a página carrega como ponto de partida a semana com as atribuições definidas em 18/out/2026.
 
 ## Planilha
 
